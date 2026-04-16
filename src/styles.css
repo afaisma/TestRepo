@@ -1,0 +1,174 @@
+:root {
+  font-family:
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+  line-height: 1.5;
+  color: #e2e8f0;
+  background: #0f172a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+}
+
+#app {
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+h1 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+nav a {
+  color: #38bdf8;
+  text-decoration: none;
+  font-size: 0.9375rem;
+}
+
+nav a:hover,
+nav a:focus-visible {
+  text-decoration: underline;
+}
+
+.preview-wrap {
+  aspect-ratio: 4 / 3;
+  width: 100%;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: #1e293b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.preview-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.preview-placeholder {
+  color: #64748b;
+  font-size: 0.875rem;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+button,
+.file-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border-radius: 0.5rem;
+  border: none;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: #38bdf8;
+  color: #0f172a;
+}
+
+.btn-secondary {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.file-trigger {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+}
+
+input[type='file'] {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.status {
+  min-height: 1.25rem;
+  font-size: 0.875rem;
+  margin-top: 0.75rem;
+}
+
+.status.error {
+  color: #fca5a5;
+}
+
+.status.ok {
+  color: #86efac;
+}
+
+.view-frame {
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: #1e293b;
+  min-height: 12rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.view-frame img {
+  width: 100%;
+  vertical-align: middle;
+  object-fit: contain;
+  max-height: 70dvh;
+}
+
+.empty-msg {
+  color: #94a3b8;
+  text-align: center;
+  padding: 2rem 1rem;
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}

@@ -33,12 +33,19 @@ async function openCameraStream(): Promise<MediaStream> {
   throw last instanceof Error ? last : new Error('Camera not available');
 }
 
+/** Vercel serverless body limit is ~4.5MB — stay under so uploads are accepted. */
+const MAX_UPLOAD_BYTES = 4_000_000;
+
 async function videoToJpegFile(video: HTMLVideoElement): Promise<File> {
-  const w = video.videoWidth;
-  const h = video.videoHeight;
-  if (w === 0 || h === 0) {
+  const w0 = video.videoWidth;
+  const h0 = video.videoHeight;
+  if (w0 === 0 || h0 === 0) {
     throw new Error('Camera not ready yet');
   }
+  const maxEdge = 1920;
+  const scale = Math.min(1, maxEdge / Math.max(w0, h0));
+  const w = Math.round(w0 * scale);
+  const h = Math.round(h0 * scale);
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
@@ -46,7 +53,7 @@ async function videoToJpegFile(video: HTMLVideoElement): Promise<File> {
   if (!ctx) {
     throw new Error('Could not capture image');
   }
-  ctx.drawImage(video, 0, 0);
+  ctx.drawImage(video, 0, 0, w, h);
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
@@ -57,9 +64,66 @@ async function videoToJpegFile(video: HTMLVideoElement): Promise<File> {
         resolve(new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' }));
       },
       'image/jpeg',
-      0.92,
+      0.88,
     );
   });
+}
+
+/**
+ * Shrinks JPEG dimensions/quality until under Vercel's limit (large gallery picks / high-res).
+ */
+async function compressImageForUpload(file: File): Promise<File> {
+  if (file.size <= MAX_UPLOAD_BYTES) {
+    return file;
+  }
+
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error('Could not read this image — try another format (JPEG/PNG).');
+  }
+
+  let maxSide = 2048;
+  let quality = 0.85;
+
+  try {
+    for (let round = 0; round < 18; round++) {
+      const w = bitmap.width;
+      const h = bitmap.height;
+      const scale = Math.min(1, maxSide / Math.max(w, h));
+      const tw = Math.max(1, Math.round(w * scale));
+      const th = Math.max(1, Math.round(h * scale));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = tw;
+      canvas.height = th;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Could not process image');
+      }
+      ctx.drawImage(bitmap, 0, 0, tw, th);
+
+      const blob: Blob | null = await new Promise((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/jpeg', quality),
+      );
+      if (!blob) {
+        throw new Error('Could not compress image');
+      }
+      if (blob.size <= MAX_UPLOAD_BYTES) {
+        return new File([blob], 'upload.jpg', { type: 'image/jpeg' });
+      }
+      if (quality > 0.48) {
+        quality -= 0.06;
+      } else {
+        maxSide = Math.max(640, Math.floor(maxSide * 0.88));
+        quality = 0.82;
+      }
+    }
+    throw new Error('Image is still too large — try a smaller photo.');
+  } finally {
+    bitmap.close();
+  }
 }
 
 type Route = 'capture' | 'view';
@@ -243,14 +307,22 @@ function renderCapture(root: HTMLDivElement) {
   uploadBtn.addEventListener('click', async () => {
     if (!currentFile) return;
     uploadBtn.disabled = true;
-    setStatus('Uploading…');
+    setStatus('Preparing…');
     try {
+      const toSend = await compressImageForUpload(currentFile);
+      setStatus('Uploading…');
       const body = new FormData();
-      body.append('image', currentFile, currentFile.name);
+      body.append('image', toSend, toSend.name);
       const res = await fetch('/api/upload', { method: 'POST', body });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      const raw = await res.text();
+      let serverError: string | undefined;
+      try {
+        serverError = (JSON.parse(raw) as { error?: string }).error;
+      } catch {
+        serverError = raw ? raw.slice(0, 160) : undefined;
+      }
       if (!res.ok) {
-        throw new Error(data.error || res.statusText || 'Upload failed');
+        throw new Error(serverError || `Upload failed (${res.status})`);
       }
       revokePreview();
       stopCaptureStream();

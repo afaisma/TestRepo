@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import getRawBody from 'raw-body';
 import { put } from '@vercel/blob';
-import { BLOB_PATH } from './blobPath';
+import { BLOB_PATH } from './blobPath.js';
 
 const MAX_BYTES = 4_500_000;
 

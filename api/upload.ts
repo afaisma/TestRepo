@@ -11,15 +11,14 @@ function json(data: object, status: number, headers?: Record<string, string>): R
 }
 
 /**
- * Web Request/Response + FormData — avoids busboy/stream issues with Vercel Node helpers
- * (Next-only `bodyParser: false` does not apply here and caused FUNCTION_INVOCATION_FAILED).
+ * Must be a default **function** (not `export default { fetch: ... }`), per Vercel Node runtime.
  */
-export default {
-  async fetch(request: Request): Promise<Response> {
-    if (request.method !== 'POST') {
-      return json({ error: 'Method not allowed' }, 405, { Allow: 'POST' });
-    }
+export default async function handler(request: Request): Promise<Response> {
+  if (request.method !== 'POST') {
+    return json({ error: 'Method not allowed' }, 405, { Allow: 'POST' });
+  }
 
+  try {
     const token = process.env.BLOB_READ_WRITE_TOKEN;
     if (!token) {
       return json({ error: 'Server missing BLOB_READ_WRITE_TOKEN' }, 500);
@@ -47,18 +46,16 @@ export default {
       return json({ error: 'File too large' }, 413);
     }
 
-    try {
-      await put(BLOB_PATH, buf, {
-        access: 'public',
-        contentType: file.type || 'image/jpeg',
-        addRandomSuffix: false,
-        token,
-      });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'Upload failed';
-      return json({ error: message }, 500);
-    }
+    await put(BLOB_PATH, buf, {
+      access: 'public',
+      contentType: file.type || 'image/jpeg',
+      addRandomSuffix: false,
+      token,
+    });
 
     return Response.json({ ok: true });
-  },
-};
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Upload failed';
+    return json({ error: message }, 500);
+  }
+}

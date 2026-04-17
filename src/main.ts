@@ -301,7 +301,7 @@ function renderCapture(root: HTMLDivElement) {
     checkSetupBtn.disabled = true;
     setStatus('Checking…', 'info');
     try {
-      const res = await fetch('/api/health');
+      const res = await fetch('/api/blob-status');
       const raw = await res.text();
       let payload: unknown;
       try {
@@ -353,7 +353,7 @@ function renderCapture(root: HTMLDivElement) {
         throw new Error(
           serverError ||
             (raw.includes('FUNCTION_INVOCATION_FAILED')
-              ? 'Server function crashed — open Vercel → Deployment → Logs, or use “Check server setup” and /api/health.'
+              ? 'Server function crashed — open Vercel → Deployment → Logs, or use “Check server setup” and /api/blob-status.'
               : `Upload failed (${res.status})`),
         );
       }

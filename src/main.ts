@@ -175,6 +175,9 @@ function renderCapture(root: HTMLDivElement) {
       </button>
     </p>
     <p class="status" id="status" aria-live="polite"></p>
+    <p class="setup-tools">
+      <button type="button" class="setup-link" id="checkSetup">Check server setup</button>
+    </p>
   `;
 
   const placeholder = root.querySelector<HTMLSpanElement>('#placeholder')!;
@@ -190,9 +193,10 @@ function renderCapture(root: HTMLDivElement) {
   const uploadBtn = root.querySelector<HTMLButtonElement>('#upload')!;
   const fileInput = root.querySelector<HTMLInputElement>('#file')!;
   const pickGalleryBtn = root.querySelector<HTMLButtonElement>('#pickGallery')!;
+  const checkSetupBtn = root.querySelector<HTMLButtonElement>('#checkSetup')!;
   const statusEl = root.querySelector<HTMLParagraphElement>('#status')!;
 
-  const setStatus = (text: string, kind: '' | 'error' | 'ok' = '') => {
+  const setStatus = (text: string, kind: '' | 'error' | 'ok' | 'info' = '') => {
     statusEl.textContent = text;
     statusEl.className = `status${kind ? ` ${kind}` : ''}`;
   };
@@ -293,6 +297,29 @@ function renderCapture(root: HTMLDivElement) {
     fileInput.click();
   });
 
+  checkSetupBtn.addEventListener('click', async () => {
+    checkSetupBtn.disabled = true;
+    setStatus('Checking…', 'info');
+    try {
+      const res = await fetch('/api/health');
+      const raw = await res.text();
+      let payload: unknown;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        payload = raw.slice(0, 400);
+      }
+      const line = typeof payload === 'object' && payload !== null
+        ? JSON.stringify(payload, null, 2)
+        : String(payload);
+      setStatus(res.ok ? line : `HTTP ${res.status}\n${line}`, res.ok ? 'info' : 'error');
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Request failed', 'error');
+    } finally {
+      checkSetupBtn.disabled = false;
+    }
+  });
+
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
     setStatus('');
@@ -319,10 +346,16 @@ function renderCapture(root: HTMLDivElement) {
       try {
         serverError = (JSON.parse(raw) as { error?: string }).error;
       } catch {
-        serverError = raw ? raw.slice(0, 160) : undefined;
+        serverError = raw ? raw.slice(0, 300) : undefined;
       }
       if (!res.ok) {
-        throw new Error(serverError || `Upload failed (${res.status})`);
+        console.error('[upload] failed', { status: res.status, body: raw.slice(0, 500) });
+        throw new Error(
+          serverError ||
+            (raw.includes('FUNCTION_INVOCATION_FAILED')
+              ? 'Server function crashed — open Vercel → Deployment → Logs, or use “Check server setup” and /api/health.'
+              : `Upload failed (${res.status})`),
+        );
       }
       revokePreview();
       stopCaptureStream();

@@ -25,19 +25,27 @@ For this POC, images are shown via a **public URL** from Blob. When creating the
 
 After deploy, open in the browser (replace with your real host):
 
-- **`https://YOUR_DEPLOYMENT.vercel.app/api/blob-status`**  
+- **`https://YOUR_DEPLOYMENT.vercel.app/api/diagnostic`**  
   Should return JSON like `{ "ok": true, "blobReadWriteToken": "configured" }`.  
   If it says **`"missing"`**, the token is not set for that deployment — fix step 1 and redeploy.
 
 - In the app **Capture** screen, tap **“Check server setup”** — same JSON appears in the status area.
 
-If **`/api/blob-status` itself** fails or hangs, the problem is broader (build, routing, or runtime), not only Blob. Use step 5.
+If **`/api/diagnostic` itself** fails or hangs, the problem is broader (build, routing, or runtime), not only Blob. Use step 5.
+
+### Upload returns “Empty body” or always fails
+
+The upload API reads the **raw POST body** (not `multipart/form-data`). If you see **`Empty body`** or uploads never work, add this **project** environment variable on Vercel, then redeploy:
+
+- **`NODEJS_HELPERS`** = **`0`**
+
+That disables Vercel’s automatic body parsing so the stream can be read with `raw-body`. See [Vercel Node.js helpers](https://vercel.com/docs/functions/runtimes/node-js#disabling-helpers-for-node.js).
 
 ## 5. Function logs (find the real error)
 
 1. **Vercel** → project → **Deployments** → latest successful (or failed) deployment.
 2. Open **Functions** or **Logs** (wording varies).
-3. Filter or search for **`/api/upload`** or **`/api/blob-status`** and the time of your request.
+3. Filter or search for **`/api/upload`** or **`/api/diagnostic`** and the time of your request.
 4. Copy the **stack trace** or error message — that line explains the crash (e.g. missing module, thrown error inside the handler).
 
 ## 6. Browser devtools (client-side)

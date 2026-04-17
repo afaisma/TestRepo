@@ -1,33 +1,36 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { BlobNotFoundError, head } from '@vercel/blob';
 import { BLOB_PATH } from './blobPath';
 
-export default async function handler(request: Request): Promise<Response> {
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.status(405).setHeader('Allow', 'GET, HEAD').end();
+    return;
   }
 
   const token = process.env.BLOB_READ_WRITE_TOKEN;
   if (!token) {
-    return Response.json({ error: 'Server missing BLOB_READ_WRITE_TOKEN' }, { status: 500 });
+    res.status(500).json({ error: 'Server missing BLOB_READ_WRITE_TOKEN' });
+    return;
   }
 
   try {
     const blob = await head(BLOB_PATH, { token });
-    if (request.method === 'HEAD') {
-      return new Response(null, {
-        status: 200,
-        headers: { 'Content-Type': blob.contentType || 'image/jpeg' },
-      });
+    if (req.method === 'HEAD') {
+      res.status(200).setHeader('Content-Type', blob.contentType || 'image/jpeg').end();
+      return;
     }
-    return Response.redirect(blob.url, 307);
+    res.redirect(307, blob.url);
   } catch (e: unknown) {
     if (e instanceof BlobNotFoundError) {
-      if (request.method === 'HEAD') {
-        return new Response(null, { status: 404 });
+      if (req.method === 'HEAD') {
+        res.status(404).end();
+        return;
       }
-      return Response.json({ error: 'No image uploaded yet' }, { status: 404 });
+      res.status(404).json({ error: 'No image uploaded yet' });
+      return;
     }
     const message = e instanceof Error ? e.message : 'Error';
-    return Response.json({ error: message }, { status: 500 });
+    res.status(500).json({ error: message });
   }
 }

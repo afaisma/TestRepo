@@ -6,6 +6,62 @@ if (!el || !(el instanceof HTMLDivElement)) {
 }
 const app = el;
 
+/** Stopped when leaving capture route or starting a new take. */
+let activeCaptureStream: MediaStream | null = null;
+
+function stopCaptureStream() {
+  activeCaptureStream?.getTracks().forEach((t) => t.stop());
+  activeCaptureStream = null;
+}
+
+async function openCameraStream(): Promise<MediaStream> {
+  const attempts: MediaStreamConstraints[] = [
+    { video: { facingMode: { ideal: 'environment' } }, audio: false },
+    { video: { facingMode: 'environment' }, audio: false },
+    { video: true, audio: false },
+  ];
+  let last: unknown;
+  for (const constraints of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      activeCaptureStream = stream;
+      return stream;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last instanceof Error ? last : new Error('Camera not available');
+}
+
+async function videoToJpegFile(video: HTMLVideoElement): Promise<File> {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (w === 0 || h === 0) {
+    throw new Error('Camera not ready yet');
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Could not capture image');
+  }
+  ctx.drawImage(video, 0, 0);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('Could not capture image'));
+          return;
+        }
+        resolve(new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' }));
+      },
+      'image/jpeg',
+      0.92,
+    );
+  });
+}
+
 type Route = 'capture' | 'view';
 
 function currentRoute(): Route {
@@ -14,12 +70,16 @@ function currentRoute(): Route {
 }
 
 function renderCapture(root: HTMLDivElement) {
-  let objectUrl: string | null = null;
+  let previewObjectUrl: string | null = null;
+  /** Image ready to upload (from camera snapshot or file picker). */
+  let currentFile: File | null = null;
+  /** 'idle' | 'live' (camera on) | 'review' (frozen frame / file chosen) */
+  let phase: 'idle' | 'live' | 'review' = 'idle';
 
-  const revoke = () => {
-    if (objectUrl) {
-      URL.revokeObjectURL(objectUrl);
-      objectUrl = null;
+  const revokePreview = () => {
+    if (previewObjectUrl) {
+      URL.revokeObjectURL(previewObjectUrl);
+      previewObjectUrl = null;
     }
   };
 
@@ -29,25 +89,43 @@ function renderCapture(root: HTMLDivElement) {
       <nav><a href="#/view">View last</a></nav>
     </header>
     <div class="preview-wrap" id="previewBox">
-      <span class="preview-placeholder" id="placeholder">No photo yet</span>
+      <span class="preview-placeholder" id="placeholder">Camera preview</span>
+      <video id="previewVideo" playsinline muted style="display:none"></video>
+      <img id="previewImg" alt="Preview" style="display:none" />
     </div>
-    <div class="actions">
-      <label class="file-trigger">
-        <span class="sr-only">Take or choose photo</span>
-        <input id="file" type="file" accept="image/*" capture="environment" />
-        Take / choose photo
-      </label>
-      <button type="button" class="btn-secondary" id="retake" disabled>Retake</button>
-      <button type="button" class="btn-primary" id="upload" disabled>Upload</button>
+    <div class="actions" id="actionsIdle">
+      <button type="button" class="btn-primary" id="takePhoto">Take photo</button>
     </div>
+    <div class="actions actions-row" id="actionsLive" style="display:none">
+      <button type="button" class="btn-secondary" id="cancelLive">Cancel</button>
+      <button type="button" class="btn-primary" id="shutter">Capture</button>
+    </div>
+    <div class="actions" id="actionsReview" style="display:none">
+      <button type="button" class="btn-secondary" id="retake">Retake</button>
+      <button type="button" class="btn-primary" id="upload">Upload</button>
+    </div>
+    <p class="fallback-link">
+      <input id="file" type="file" accept="image/*" class="sr-only" tabindex="-1" />
+      <button type="button" class="btn-secondary" id="pickGallery" style="width: 100%">
+        Choose from gallery
+      </button>
+    </p>
     <p class="status" id="status" aria-live="polite"></p>
   `;
 
-  const fileInput = root.querySelector<HTMLInputElement>('#file')!;
-  const previewBox = root.querySelector<HTMLDivElement>('#previewBox')!;
   const placeholder = root.querySelector<HTMLSpanElement>('#placeholder')!;
+  const previewVideo = root.querySelector<HTMLVideoElement>('#previewVideo')!;
+  const previewImg = root.querySelector<HTMLImageElement>('#previewImg')!;
+  const actionsIdle = root.querySelector<HTMLDivElement>('#actionsIdle')!;
+  const actionsLive = root.querySelector<HTMLDivElement>('#actionsLive')!;
+  const actionsReview = root.querySelector<HTMLDivElement>('#actionsReview')!;
+  const takePhotoBtn = root.querySelector<HTMLButtonElement>('#takePhoto')!;
+  const cancelLiveBtn = root.querySelector<HTMLButtonElement>('#cancelLive')!;
+  const shutterBtn = root.querySelector<HTMLButtonElement>('#shutter')!;
   const retakeBtn = root.querySelector<HTMLButtonElement>('#retake')!;
   const uploadBtn = root.querySelector<HTMLButtonElement>('#upload')!;
+  const fileInput = root.querySelector<HTMLInputElement>('#file')!;
+  const pickGalleryBtn = root.querySelector<HTMLButtonElement>('#pickGallery')!;
   const statusEl = root.querySelector<HTMLParagraphElement>('#status')!;
 
   const setStatus = (text: string, kind: '' | 'error' | 'ok' = '') => {
@@ -55,52 +133,128 @@ function renderCapture(root: HTMLDivElement) {
     statusEl.className = `status${kind ? ` ${kind}` : ''}`;
   };
 
-  const updatePreview = () => {
-    const file = fileInput.files?.[0];
-    revoke();
-    previewBox.querySelector('img')?.remove();
-    if (!file) {
-      placeholder.style.display = '';
-      retakeBtn.disabled = true;
-      uploadBtn.disabled = true;
-      return;
-    }
-    objectUrl = URL.createObjectURL(file);
-    const img = document.createElement('img');
-    img.src = objectUrl;
-    img.alt = 'Preview';
-    placeholder.style.display = 'none';
-    previewBox.appendChild(img);
-    retakeBtn.disabled = false;
-    uploadBtn.disabled = false;
+  const showPhase = () => {
+    const idle = phase === 'idle';
+    const live = phase === 'live';
+    const review = phase === 'review';
+    actionsIdle.style.display = idle ? 'flex' : 'none';
+    actionsLive.style.display = live ? 'flex' : 'none';
+    actionsReview.style.display = review ? 'flex' : 'none';
+    pickGalleryBtn.disabled = live;
   };
 
-  fileInput.addEventListener('change', () => {
+  const clearReview = () => {
+    revokePreview();
+    currentFile = null;
+    previewImg.style.display = 'none';
+    previewImg.removeAttribute('src');
+  };
+
+  const enterIdle = () => {
+    stopCaptureStream();
+    previewVideo.srcObject = null;
+    previewVideo.style.display = 'none';
+    clearReview();
+    placeholder.style.display = '';
+    placeholder.textContent = 'Camera preview';
+    phase = 'idle';
+    showPhase();
+  };
+
+  const enterReview = (file: File) => {
+    stopCaptureStream();
+    previewVideo.srcObject = null;
+    previewVideo.style.display = 'none';
+    revokePreview();
+    currentFile = file;
+    previewObjectUrl = URL.createObjectURL(file);
+    previewImg.src = previewObjectUrl;
+    previewImg.style.display = '';
+    placeholder.style.display = 'none';
+    phase = 'review';
+    showPhase();
+  };
+
+  takePhotoBtn.addEventListener('click', async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setStatus('Camera API not supported — use “Choose from gallery”.', 'error');
+      return;
+    }
+    setStatus('Starting camera…');
+    takePhotoBtn.disabled = true;
+    pickGalleryBtn.disabled = true;
+    try {
+      const stream = await openCameraStream();
+      previewVideo.srcObject = stream;
+      previewVideo.style.display = '';
+      placeholder.style.display = 'none';
+      previewImg.style.display = 'none';
+      await previewVideo.play();
+      phase = 'live';
+      setStatus('');
+      showPhase();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not open camera';
+      setStatus(`${msg} — try “Choose from gallery” or check permissions.`, 'error');
+      enterIdle();
+    } finally {
+      takePhotoBtn.disabled = false;
+      pickGalleryBtn.disabled = false;
+    }
+  });
+
+  cancelLiveBtn.addEventListener('click', () => {
     setStatus('');
-    updatePreview();
+    enterIdle();
+  });
+
+  shutterBtn.addEventListener('click', async () => {
+    try {
+      const file = await videoToJpegFile(previewVideo);
+      enterReview(file);
+      setStatus('');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Capture failed';
+      setStatus(msg, 'error');
+    }
   });
 
   retakeBtn.addEventListener('click', () => {
-    fileInput.value = '';
     setStatus('');
-    updatePreview();
+    fileInput.value = '';
+    enterIdle();
+  });
+
+  pickGalleryBtn.addEventListener('click', () => {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    setStatus('');
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setStatus('Please choose an image file.', 'error');
+      return;
+    }
+    enterReview(file);
   });
 
   uploadBtn.addEventListener('click', async () => {
-    const file = fileInput.files?.[0];
-    if (!file) return;
+    if (!currentFile) return;
     uploadBtn.disabled = true;
     setStatus('Uploading…');
     try {
       const body = new FormData();
-      body.append('image', file, file.name);
+      body.append('image', currentFile, currentFile.name);
       const res = await fetch('/api/upload', { method: 'POST', body });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) {
         throw new Error(data.error || res.statusText || 'Upload failed');
       }
+      revokePreview();
+      stopCaptureStream();
       setStatus('Uploaded.', 'ok');
-      revoke();
       window.location.hash = '#/view';
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Upload failed';
@@ -109,6 +263,7 @@ function renderCapture(root: HTMLDivElement) {
     }
   });
 
+  showPhase();
 }
 
 function renderView(root: HTMLDivElement) {
@@ -144,6 +299,9 @@ function renderView(root: HTMLDivElement) {
 
 function render() {
   const route = currentRoute();
+  if (route !== 'capture') {
+    stopCaptureStream();
+  }
   const root = app;
   if (route === 'view') {
     renderView(root);

@@ -63,10 +63,15 @@ nav a:focus-visible {
   margin-bottom: 1rem;
 }
 
-.preview-wrap img {
+.preview-wrap img,
+.preview-wrap video {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.preview-wrap video {
+  background: #000;
 }
 
 .preview-placeholder {
@@ -78,6 +83,37 @@ nav a:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.actions-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.actions-row > * {
+  flex: 1;
+}
+
+.fallback-link {
+  text-align: center;
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.fallback-link button {
+  background: none;
+  border: none;
+  color: #38bdf8;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.25rem;
+  min-height: unset;
+}
+
+.fallback-link button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 button,

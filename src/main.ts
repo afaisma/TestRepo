@@ -1,5 +1,4 @@
 import './styles.css';
-import { LOCATIONS } from './locations';
 
 const el = document.getElementById('app');
 if (!el || !(el instanceof HTMLDivElement)) {
@@ -133,7 +132,7 @@ function defaultLocalDatetime(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-type Route = 'capture' | 'view';
+type Route = 'capture' | 'view' | 'admin';
 
 type PhotoMeta = {
   date_time: string;
@@ -142,8 +141,14 @@ type PhotoMeta = {
 };
 
 function currentRoute(): Route {
-  const h = window.location.hash.replace(/^#\/?/, '') || 'capture';
-  return h === 'view' ? 'view' : 'capture';
+  let h = window.location.hash.replace(/^#/, '');
+  const q = h.indexOf('?');
+  if (q >= 0) h = h.slice(0, q);
+  h = h.replace(/^\/+/, '').replace(/\/+$/, '');
+  const seg = (h || 'capture').toLowerCase();
+  if (seg === 'view') return 'view';
+  if (seg === 'admin') return 'admin';
+  return 'capture';
 }
 
 function renderCapture(root: HTMLDivElement) {
@@ -163,7 +168,7 @@ function renderCapture(root: HTMLDivElement) {
   root.innerHTML = `
     <header>
       <h1>Capture</h1>
-      <nav><a href="#/view">View last</a></nav>
+      <nav><a href="#/view">View last</a> · <a href="#/admin">Locations</a></nav>
     </header>
     <div class="preview-wrap" id="previewBox">
       <span class="preview-placeholder" id="placeholder">Camera preview</span>
@@ -177,9 +182,8 @@ function renderCapture(root: HTMLDivElement) {
       </label>
       <label>
         Location
-        <select id="metaLocation" required>
-          <option value="">Select location…</option>
-          ${LOCATIONS.map((loc) => `<option value="${loc}">${loc}</option>`).join('')}
+        <select id="metaLocation" required disabled>
+          <option value="">Loading locations…</option>
         </select>
       </label>
       <label>
@@ -229,6 +233,29 @@ function renderCapture(root: HTMLDivElement) {
   const metaLocation = root.querySelector<HTMLSelectElement>('#metaLocation')!;
   const metaNotes = root.querySelector<HTMLTextAreaElement>('#metaNotes')!;
   const statusEl = root.querySelector<HTMLParagraphElement>('#status')!;
+
+  fetch('/api/locations')
+    .then(async (r) => {
+      if (!r.ok) throw new Error('Could not load locations');
+      const data = (await r.json()) as { locations?: unknown };
+      const locs = Array.isArray(data.locations)
+        ? data.locations.filter((x): x is string => typeof x === 'string')
+        : [];
+      metaLocation.disabled = false;
+      metaLocation.innerHTML =
+        '<option value="">Select location…</option>' +
+        locs.map((loc) => {
+          const label = escapeHtml(loc);
+          const val = escapeHtmlAttr(loc);
+          return `<option value="${val}">${label}</option>`;
+        }).join('');
+    })
+    .catch((e) => {
+      metaLocation.disabled = false;
+      metaLocation.innerHTML =
+        '<option value="">Select location…</option><option value="" disabled>(failed to load list)</option>';
+      setStatus(e instanceof Error ? e.message : 'Could not load locations', 'error');
+    });
 
   const setStatus = (text: string, kind: '' | 'error' | 'ok' | 'info' = '') => {
     statusEl.textContent = text;
@@ -428,7 +455,7 @@ function renderView(root: HTMLDivElement) {
   root.innerHTML = `
     <header>
       <h1>Last upload</h1>
-      <nav><a href="#/capture">Capture</a></nav>
+      <nav><a href="#/capture">Capture</a> · <a href="#/admin">Locations</a></nav>
     </header>
     <div class="view-frame" id="frame">
       <img id="shot" alt="Last uploaded image" style="display:none" />
@@ -491,6 +518,107 @@ function renderView(root: HTMLDivElement) {
     });
 }
 
+function renderAdmin(root: HTMLDivElement) {
+  root.innerHTML = `
+    <header>
+      <h1>Locations</h1>
+      <nav><a href="#/capture">Capture</a> · <a href="#/view">View last</a></nav>
+    </header>
+    <p class="admin-note">POC: saving is not authenticated — anyone who can open this URL can change the list.</p>
+    <div id="locList" class="loc-list"></div>
+    <div class="actions">
+      <button type="button" class="btn-secondary" id="addLoc">Add row</button>
+      <button type="button" class="btn-primary" id="saveLoc">Save</button>
+    </div>
+    <p class="status" id="adminStatus" aria-live="polite"></p>
+  `;
+
+  const locList = root.querySelector<HTMLDivElement>('#locList')!;
+  const saveBtn = root.querySelector<HTMLButtonElement>('#saveLoc')!;
+  const statusEl = root.querySelector<HTMLParagraphElement>('#adminStatus')!;
+
+  const setStatus = (text: string, kind: '' | 'error' | 'ok' | 'info' = '') => {
+    statusEl.textContent = text;
+    statusEl.className = `status${kind ? ` ${kind}` : ''}`;
+  };
+
+  function addRow(value = '') {
+    const row = document.createElement('div');
+    row.className = 'loc-row';
+    row.innerHTML = `
+      <input type="text" class="loc-input" maxlength="200" value="${escapeHtmlAttr(value)}" placeholder="Location label" />
+      <button type="button" class="btn-secondary btn-row-remove" aria-label="Remove row">Remove</button>
+    `;
+    const rm = row.querySelector<HTMLButtonElement>('.btn-row-remove')!;
+    rm.addEventListener('click', () => {
+      row.remove();
+      if (!locList.querySelector('.loc-row')) {
+        addRow('');
+      }
+    });
+    locList.appendChild(row);
+  }
+
+  root.querySelector<HTMLButtonElement>('#addLoc')!.addEventListener('click', () => addRow(''));
+
+  saveBtn.addEventListener('click', async () => {
+    const inputs = [...root.querySelectorAll<HTMLInputElement>('.loc-input')];
+    const locations = inputs.map((i) => i.value.trim()).filter(Boolean);
+    if (locations.length === 0) {
+      setStatus('Add at least one non-empty location.', 'error');
+      return;
+    }
+    saveBtn.disabled = true;
+    setStatus('Saving…', 'info');
+    try {
+      const res = await fetch('/api/locations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locations }),
+      });
+      const raw = await res.text();
+      let serverError: string | undefined;
+      try {
+        serverError = (JSON.parse(raw) as { error?: string }).error;
+      } catch {
+        serverError = raw ? raw.slice(0, 300) : undefined;
+      }
+      if (!res.ok) {
+        throw new Error(serverError || `Save failed (${res.status})`);
+      }
+      setStatus('Saved.', 'ok');
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Save failed', 'error');
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  fetch('/api/locations')
+    .then(async (r) => {
+      if (!r.ok) throw new Error('Could not load locations');
+      const data = (await r.json()) as { locations?: unknown };
+      const locs = Array.isArray(data.locations)
+        ? data.locations.filter((x): x is string => typeof x === 'string')
+        : [];
+      locList.innerHTML = '';
+      if (locs.length === 0) addRow('');
+      else locs.forEach((l) => addRow(l));
+    })
+    .catch((e) => {
+      setStatus(e instanceof Error ? e.message : 'Could not load locations', 'error');
+      locList.innerHTML = '';
+      addRow('');
+    });
+}
+
+function escapeHtmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;');
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -501,12 +629,15 @@ function escapeHtml(s: string): string {
 
 function render() {
   const route = currentRoute();
+  document.documentElement.dataset.route = route;
   if (route !== 'capture') {
     stopCaptureStream();
   }
   const root = app;
   if (route === 'view') {
     renderView(root);
+  } else if (route === 'admin') {
+    renderAdmin(root);
   } else {
     renderCapture(root);
   }

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import busboy from 'busboy';
 import { put } from '@vercel/blob';
 import { BLOB_PATH, META_PATH } from './blobPath.js';
-import { isAllowedLocation } from './allowedLocations.js';
+import { readAllowedLocations } from './locationsStore.js';
 
 const MAX_BYTES = 4_500_000;
 const MAX_NOTES_LEN = 2000;
@@ -111,8 +111,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       res.status(400).json({ error: 'location is required' });
       return;
     }
-    if (!isAllowedLocation(location)) {
-      res.status(400).json({ error: 'location must be one of Loc1–Loc10' });
+    const allowed = await readAllowedLocations(token);
+    if (!allowed.includes(location)) {
+      res.status(400).json({ error: 'location must be one of the allowed values' });
       return;
     }
 

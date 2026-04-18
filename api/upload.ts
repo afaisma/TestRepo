@@ -1,15 +1,71 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import getRawBody from 'raw-body';
+import busboy from 'busboy';
 import { put } from '@vercel/blob';
-import { BLOB_PATH } from './blobPath.js';
+import { BLOB_PATH, META_PATH } from './blobPath.js';
+import { isAllowedLocation } from './allowedLocations.js';
 
 const MAX_BYTES = 4_500_000;
+const MAX_NOTES_LEN = 2000;
 
-/**
- * Raw image bytes in POST body (see client: `fetch` with `body: file` + Content-Type).
- * Requires an unconsumed request stream; if uploads fail with empty body, set
- * `NODEJS_HELPERS=0` for the project on Vercel (see VERCEL_CHECKLIST.md).
- */
+type ParsedMultipart = {
+  image: { buffer: Buffer; mime: string };
+  fields: Record<string, string>;
+};
+
+function parseMultipart(req: VercelRequest): Promise<ParsedMultipart> {
+  return new Promise((resolve, reject) => {
+    const bb = busboy({
+      headers: req.headers,
+      limits: { fileSize: MAX_BYTES, files: 1, fields: 20 },
+    });
+
+    const fields: Record<string, string> = {};
+    let imageBuffer: Buffer | null = null;
+    let imageMime = 'application/octet-stream';
+    let imageDone: Promise<void> = Promise.resolve();
+
+    bb.on('file', (name, file, info) => {
+      if (name !== 'image') {
+        file.resume();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      imageDone = new Promise<void>((res, rej) => {
+        file.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        file.on('limit', () => rej(new Error('File too large')));
+        file.on('end', () => {
+          imageBuffer = Buffer.concat(chunks);
+          imageMime = info.mimeType || 'application/octet-stream';
+          res();
+        });
+        file.on('error', rej);
+      });
+    });
+
+    bb.on('field', (name, val) => {
+      fields[name] = val;
+    });
+
+    bb.on('error', reject);
+    bb.on('finish', async () => {
+      try {
+        await imageDone;
+        if (!imageBuffer?.length) {
+          reject(new Error('No image in request (field name: image)'));
+          return;
+        }
+        resolve({ image: { buffer: imageBuffer, mime: imageMime }, fields });
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    req.pipe(bb);
+  });
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== 'POST') {
     res.status(405).setHeader('Allow', 'POST').json({ error: 'Method not allowed' });
@@ -23,38 +79,74 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
 
   const rawCt = String(req.headers['content-type'] || '');
-  const contentType = rawCt.split(';')[0].trim().toLowerCase();
-  if (!contentType.startsWith('image/')) {
-    res.status(400).json({ error: 'Content-Type must be an image/* type' });
+  if (!rawCt.toLowerCase().includes('multipart/form-data')) {
+    res.status(400).json({ error: 'Content-Type must be multipart/form-data' });
     return;
   }
 
   try {
-    const buffer = await getRawBody(req, {
-      limit: MAX_BYTES,
-      length: req.headers['content-length']
-        ? Number.parseInt(String(req.headers['content-length']), 10)
-        : undefined,
-    });
+    const { image, fields } = await parseMultipart(req);
 
-    if (!buffer.length) {
-      res.status(400).json({
-        error:
-          'Empty body — if this persists, add env var NODEJS_HELPERS=0 on Vercel and redeploy.',
-      });
+    if (!image.mime.startsWith('image/')) {
+      res.status(400).json({ error: 'Image must be an image/* type' });
       return;
     }
 
-    await put(BLOB_PATH, buffer, {
+    const dateRaw = (fields.date_time || '').trim();
+    const location = (fields.location || '').trim();
+    const notes = (fields.notes || '').trim();
+
+    if (!dateRaw) {
+      res.status(400).json({ error: 'date_time is required' });
+      return;
+    }
+    const dateParsed = new Date(dateRaw);
+    if (Number.isNaN(dateParsed.getTime())) {
+      res.status(400).json({ error: 'date_time is invalid' });
+      return;
+    }
+    const date_time = dateParsed.toISOString();
+
+    if (!location) {
+      res.status(400).json({ error: 'location is required' });
+      return;
+    }
+    if (!isAllowedLocation(location)) {
+      res.status(400).json({ error: 'location must be one of Loc1–Loc10' });
+      return;
+    }
+
+    if (notes.length > MAX_NOTES_LEN) {
+      res.status(400).json({ error: `notes must be at most ${MAX_NOTES_LEN} characters` });
+      return;
+    }
+
+    const meta = {
+      date_time,
+      location,
+      notes,
+    };
+
+    await put(BLOB_PATH, image.buffer, {
       access: 'public',
-      contentType,
+      contentType: image.mime,
       addRandomSuffix: false,
       token,
     });
+
+    await put(META_PATH, JSON.stringify(meta), {
+      access: 'public',
+      contentType: 'application/json; charset=utf-8',
+      addRandomSuffix: false,
+      token,
+    });
+
     res.status(200).json({ ok: true });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Upload failed';
-    const status = message.toLowerCase().includes('limit') || message.includes('too large') ? 413 : 500;
+    const lower = message.toLowerCase();
+    const status =
+      lower.includes('too large') || lower.includes('limit') ? 413 : lower.includes('no image') ? 400 : 500;
     res.status(status).json({ error: message });
   }
 }

@@ -33,13 +33,13 @@ After deploy, open in the browser (replace with your real host):
 
 If **`/api/diagnostic` itself** fails or hangs, the problem is broader (build, routing, or runtime), not only Blob. Use step 5.
 
-### Upload returns “Empty body” or always fails
+### Upload fails or multipart never parses
 
-The upload API reads the **raw POST body** (not `multipart/form-data`). If you see **`Empty body`** or uploads never work, add this **project** environment variable on Vercel, then redeploy:
+`POST /api/upload` uses **multipart/form-data** and **busboy** on the raw request stream. If uploads fail or the body looks empty, add this **project** environment variable on Vercel, then redeploy:
 
 - **`NODEJS_HELPERS`** = **`0`**
 
-That disables Vercel’s automatic body parsing so the stream can be read with `raw-body`. See [Vercel Node.js helpers](https://vercel.com/docs/functions/runtimes/node-js#disabling-helpers-for-node.js).
+That disables Vercel’s automatic body parsing so **busboy** can read the stream. See [Vercel Node.js helpers](https://vercel.com/docs/functions/runtimes/node-js#disabling-helpers-for-node.js).
 
 ## 5. Function logs (find the real error)
 

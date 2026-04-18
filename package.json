@@ -12,9 +12,10 @@
   "dependencies": {
     "@vercel/blob": "^0.27.0",
     "@vercel/node": "^5.7.8",
-    "raw-body": "^3.0.2"
+    "busboy": "^1.6.0"
   },
   "devDependencies": {
+    "@types/busboy": "^1.5.4",
     "@types/node": "^22.10.0",
     "typescript": "~5.6.2",
     "vercel": "^39.0.0",

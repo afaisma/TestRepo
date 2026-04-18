@@ -1,4 +1,5 @@
 import './styles.css';
+import { LOCATIONS } from './locations';
 
 const el = document.getElementById('app');
 if (!el || !(el instanceof HTMLDivElement)) {
@@ -126,7 +127,19 @@ async function compressImageForUpload(file: File): Promise<File> {
   }
 }
 
+function defaultLocalDatetime(): string {
+  const d = new Date();
+  const p = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 type Route = 'capture' | 'view';
+
+type PhotoMeta = {
+  date_time: string;
+  location: string;
+  notes: string;
+};
 
 function currentRoute(): Route {
   const h = window.location.hash.replace(/^#\/?/, '') || 'capture';
@@ -156,6 +169,23 @@ function renderCapture(root: HTMLDivElement) {
       <span class="preview-placeholder" id="placeholder">Camera preview</span>
       <video id="previewVideo" playsinline muted style="display:none"></video>
       <img id="previewImg" alt="Preview" style="display:none" />
+    </div>
+    <div class="meta-panel" id="metaPanel" style="display: none">
+      <label>
+        Date and time
+        <input type="datetime-local" id="metaDateTime" required />
+      </label>
+      <label>
+        Location
+        <select id="metaLocation" required>
+          <option value="">Select location…</option>
+          ${LOCATIONS.map((loc) => `<option value="${loc}">${loc}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        Notes <span style="color: #64748b">(optional)</span>
+        <textarea id="metaNotes" maxlength="2000" rows="3" placeholder="Add notes…"></textarea>
+      </label>
     </div>
     <div class="actions" id="actionsIdle">
       <button type="button" class="btn-primary" id="takePhoto">Take photo</button>
@@ -194,6 +224,10 @@ function renderCapture(root: HTMLDivElement) {
   const fileInput = root.querySelector<HTMLInputElement>('#file')!;
   const pickGalleryBtn = root.querySelector<HTMLButtonElement>('#pickGallery')!;
   const checkSetupBtn = root.querySelector<HTMLButtonElement>('#checkSetup')!;
+  const metaPanel = root.querySelector<HTMLDivElement>('#metaPanel')!;
+  const metaDateTime = root.querySelector<HTMLInputElement>('#metaDateTime')!;
+  const metaLocation = root.querySelector<HTMLSelectElement>('#metaLocation')!;
+  const metaNotes = root.querySelector<HTMLTextAreaElement>('#metaNotes')!;
   const statusEl = root.querySelector<HTMLParagraphElement>('#status')!;
 
   const setStatus = (text: string, kind: '' | 'error' | 'ok' | 'info' = '') => {
@@ -208,6 +242,7 @@ function renderCapture(root: HTMLDivElement) {
     actionsIdle.style.display = idle ? 'flex' : 'none';
     actionsLive.style.display = live ? 'flex' : 'none';
     actionsReview.style.display = review ? 'flex' : 'none';
+    metaPanel.style.display = review ? 'flex' : 'none';
     pickGalleryBtn.disabled = live;
   };
 
@@ -239,6 +274,9 @@ function renderCapture(root: HTMLDivElement) {
     previewImg.src = previewObjectUrl;
     previewImg.style.display = '';
     placeholder.style.display = 'none';
+    metaDateTime.value = defaultLocalDatetime();
+    metaLocation.value = '';
+    metaNotes.value = '';
     phase = 'review';
     showPhase();
   };
@@ -333,15 +371,27 @@ function renderCapture(root: HTMLDivElement) {
 
   uploadBtn.addEventListener('click', async () => {
     if (!currentFile) return;
+    if (!metaDateTime.value) {
+      setStatus('Please set date and time.', 'error');
+      return;
+    }
+    if (!metaLocation.value) {
+      setStatus('Please select a location.', 'error');
+      return;
+    }
     uploadBtn.disabled = true;
     setStatus('Preparing…');
     try {
       const toSend = await compressImageForUpload(currentFile);
       setStatus('Uploading…');
+      const body = new FormData();
+      body.append('image', toSend, toSend.name || 'photo.jpg');
+      body.append('date_time', metaDateTime.value);
+      body.append('location', metaLocation.value);
+      body.append('notes', metaNotes.value.trim());
       const res = await fetch('/api/upload', {
         method: 'POST',
-        body: toSend,
-        headers: { 'Content-Type': toSend.type || 'image/jpeg' },
+        body,
       });
       const raw = await res.text();
       let serverError: string | undefined;
@@ -384,10 +434,12 @@ function renderView(root: HTMLDivElement) {
       <img id="shot" alt="Last uploaded image" style="display:none" />
       <p class="empty-msg" id="empty">No image uploaded yet</p>
     </div>
+    <div class="meta-display" id="metaDisplay" style="display: none"></div>
   `;
 
   const img = root.querySelector<HTMLImageElement>('#shot')!;
   const empty = root.querySelector<HTMLParagraphElement>('#empty')!;
+  const metaDisplay = root.querySelector<HTMLDivElement>('#metaDisplay')!;
 
   const showEmpty = () => {
     img.style.display = 'none';
@@ -399,9 +451,52 @@ function renderView(root: HTMLDivElement) {
     empty.style.display = 'none';
   };
 
+  const showMeta = (m: PhotoMeta) => {
+    const when = new Date(m.date_time);
+    const dateStr = Number.isNaN(when.getTime())
+      ? m.date_time
+      : when.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    const notesHtml =
+      m.notes && m.notes.trim()
+        ? `<p><strong>Notes</strong> ${escapeHtml(m.notes.trim())}</p>`
+        : '';
+    metaDisplay.innerHTML = `
+      <p><strong>Date and time</strong> ${escapeHtml(dateStr)}</p>
+      <p><strong>Location</strong> ${escapeHtml(m.location)}</p>
+      ${notesHtml}
+    `;
+    metaDisplay.style.display = 'block';
+  };
+
   img.onload = () => showImg();
-  img.onerror = () => showEmpty();
+  img.onerror = () => {
+    showEmpty();
+    metaDisplay.style.display = 'none';
+  };
   img.src = `/api/image?t=${bust}`;
+
+  fetch(`/api/meta?t=${bust}`)
+    .then(async (r) => {
+      if (!r.ok) {
+        metaDisplay.style.display = 'none';
+        return;
+      }
+      const data = (await r.json()) as PhotoMeta;
+      if (data && typeof data.date_time === 'string' && typeof data.location === 'string') {
+        showMeta(data);
+      }
+    })
+    .catch(() => {
+      metaDisplay.style.display = 'none';
+    });
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function render() {

@@ -4,10 +4,11 @@ Small mobile-first web app: capture a photo in the browser, preview and retake, 
 
 ## Design
 
-- **Frontend**: Vite + TypeScript, hash routing (`#/capture`, `#/view`). Capture uses `<input type="file" accept="image/*" capture="environment">` with preview (`URL.createObjectURL`), retake clears the input, upload sends `multipart/form-data` with field name **`image`** to `POST /api/upload`.
+- **Frontend**: Vite + TypeScript, hash routing (`#/capture`, `#/view`). Live camera via `getUserMedia`, preview, optional gallery pick. In review, the user sets **date/time**, **location** (hardcoded Loc1–Loc10 in [src/locations.ts](src/locations.ts)), and optional **notes**, then uploads via `multipart/form-data` (fields: `image`, `date_time`, `location`, `notes`).
 - **Backend**: Vercel Serverless Functions under `/api`:
-  - `POST /api/upload` — parses multipart with [busboy](https://github.com/mscdex/busboy), writes to **Vercel Blob** at a fixed pathname (`camera-poc/latest` in [api/blobPath.ts](api/blobPath.ts)) with `addRandomSuffix: false` so **each upload overwrites** the previous object.
-  - `GET|HEAD /api/image` — `head()` that pathname; if it exists, **redirects** to the public blob URL (or returns metadata on `HEAD`); if not, **404** so the view page can show “No image uploaded yet”.
+  - `POST /api/upload` — parses multipart with [busboy](https://github.com/mscdex/busboy), validates location against [api/allowedLocations.ts](api/allowedLocations.ts), writes the image to **`camera-poc/latest`** and JSON metadata to **`camera-poc/meta.json`** ([api/blobPath.ts](api/blobPath.ts)); both overwrite on each upload.
+  - `GET /api/meta` — returns the last metadata JSON from Blob, or **404** if none.
+  - `GET|HEAD /api/image` — `head()` the image pathname; if it exists, **redirects** to the public blob URL (or returns headers on `HEAD`); if not, **404** so the view page can show “No image uploaded yet”.
 - **Why Blob, not a local file on the VM**: Free serverless hosts usually do not give you durable disk; a single blob with a stable key matches the “one image, overwrite” requirement and works on Vercel’s free tier.
 
 **Limits**: Vercel Functions accept bodies up to about **4.5 MB** for server uploads; larger camera photos may need client-side compression or client uploads (out of scope for this POC).

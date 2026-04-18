@@ -35,9 +35,10 @@ If **`/api/diagnostic` itself** fails or hangs, the problem is broader (build, r
 
 ### Upload fails or multipart never parses
 
-`POST /api/upload` uses **multipart/form-data** and **busboy** on the raw request stream. If uploads fail or the body looks empty, add this **project** environment variable on Vercel, then redeploy:
+`POST /api/upload` uses **multipart/form-data** and **busboy** on the raw request stream. If uploads fail with **`Unexpected end of form`**, the body stream was likely pre-parsed. Fix:
 
-- **`NODEJS_HELPERS`** = **`0`**
+- This repo sets **`NODEJS_HELPERS`** = **`0`** in [`vercel.json`](vercel.json) for deployments.
+- For **`vercel dev`**, also put **`NODEJS_HELPERS=0`** in **`.env.local`** (a `vercel env pull` can remove it if the variable is not in the dashboard—add it locally or under **Settings → Environment Variables** and pull again).
 
 That disables Vercel’s automatic body parsing so **busboy** can read the stream. See [Vercel Node.js helpers](https://vercel.com/docs/functions/runtimes/node-js#disabling-helpers-for-node.js).
 

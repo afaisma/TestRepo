@@ -1,17 +1,23 @@
 import { BlobNotFoundError, head, put } from '@vercel/blob';
 import { LOCATIONS_PATH } from './blobPath.js';
 
+/** Defaults when `locations.json` is missing; duplicate labels in the source list were merged. */
 export const DEFAULT_LOCATIONS = [
-  'Loc1',
-  'Loc2',
-  'Loc3',
-  'Loc4',
-  'Loc5',
-  'Loc6',
-  'Loc7',
-  'Loc8',
-  'Loc9',
-  'Loc10',
+  'Main 1',
+  'Main 2',
+  'Annex 1',
+  'Annex 2',
+  'Annex 3',
+  'ICU',
+  'Main 3',
+  'PCU',
+  '1st Courtyard',
+  "Women's Center",
+  'Visitor lounge',
+  'EMS',
+  'ER lounge',
+  'Doctors lounge',
+  'Patient and Family Room',
 ] as const;
 
 const MAX_LOCATIONS = 100;

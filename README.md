@@ -6,7 +6,7 @@ Small mobile-first web app: capture a photo in the browser, preview and retake, 
 
 - **Frontend**: Vite + TypeScript, hash routing (`#/capture`, `#/view`, `#/admin`). Live camera via `getUserMedia`, preview, optional gallery pick. In review, the user sets **date/time**, **location** (options loaded from the server), and optional **notes**, then uploads via `multipart/form-data` (fields: `image`, `date_time`, `location`, `notes`). **`#/admin`** edits the allowed location list (POC: **no authentication** on `POST /api/locations` — fine for private demos, not for public production).
 - **Backend**: Vercel Serverless Functions under `/api`:
-  - `GET /api/locations` — returns `{ "locations": string[] }` from Blob **`camera-poc/locations.json`**, or built-in defaults (Loc1–Loc10) if the file is missing.
+  - `GET /api/locations` — returns `{ "locations": string[] }` from Blob **`camera-poc/locations.json`**, or built-in defaults (hospital floor/area labels in [api/locationsStore.ts](api/locationsStore.ts)) if the file is missing.
   - `POST /api/locations` — JSON body `{ "locations": string[] }` overwrites that blob (POC: unauthenticated).
   - `POST /api/upload` — parses multipart with [busboy](https://github.com/mscdex/busboy), validates `location` against the current allowlist, writes the image to **`camera-poc/latest`** and JSON metadata to **`camera-poc/meta.json`** ([api/blobPath.ts](api/blobPath.ts)); both overwrite on each upload.
   - `GET /api/meta` — returns the last metadata JSON from Blob, or **404** if none.

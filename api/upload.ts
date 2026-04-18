@@ -1,11 +1,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { randomUUID } from 'node:crypto';
 import busboy from 'busboy';
 import { put } from '@vercel/blob';
 import { BLOB_PATH, META_PATH } from './blobPath.js';
 import { readAllowedLocations } from './locationsStore.js';
+import { submissionImageBlobPath } from './submissionPaths.js';
+import { insertSubmission } from './submissionsRepo.js';
 
 const MAX_BYTES = 4_500_000;
 const MAX_NOTES_LEN = 2000;
+const MAX_CLIENT_INFO_LEN = 4000;
+const MAX_USER_AGENT_LEN = 512;
 
 type ParsedMultipart = {
   image: { buffer: Buffer; mime: string };
@@ -122,11 +127,60 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
+    const clientRaw = (fields.client_info || '').trim();
+    if (clientRaw.length > MAX_CLIENT_INFO_LEN) {
+      res.status(400).json({ error: `client_info must be at most ${MAX_CLIENT_INFO_LEN} characters` });
+      return;
+    }
+    let clientInfoJson: string | null = null;
+    if (clientRaw) {
+      try {
+        JSON.parse(clientRaw);
+        clientInfoJson = clientRaw;
+      } catch {
+        res.status(400).json({ error: 'client_info must be valid JSON' });
+        return;
+      }
+    }
+
     const meta = {
       date_time,
       location,
       notes,
     };
+
+    const hasDb = Boolean(process.env.DATABASE_URL?.trim());
+    const submissionId = randomUUID();
+    const imagePath = submissionImageBlobPath(submissionId, image.mime);
+    const uaRaw = req.headers['user-agent'];
+    const userAgent =
+      typeof uaRaw === 'string' ? uaRaw.slice(0, MAX_USER_AGENT_LEN) : null;
+
+    if (hasDb) {
+      await put(imagePath, image.buffer, {
+        access: 'public',
+        contentType: image.mime,
+        addRandomSuffix: false,
+        token,
+      });
+      try {
+        await insertSubmission({
+          id: submissionId,
+          capturedAt: dateParsed,
+          location,
+          notes,
+          imagePath,
+          userAgent,
+          clientInfoJson,
+        });
+      } catch (dbErr) {
+        const dbMsg = dbErr instanceof Error ? dbErr.message : 'Database error';
+        res.status(500).json({
+          error: `Image stored but database save failed: ${dbMsg}. Ensure migrations ran (db/migrations/001_submissions.sql).`,
+        });
+        return;
+      }
+    }
 
     await put(BLOB_PATH, image.buffer, {
       access: 'public',
@@ -142,7 +196,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       token,
     });
 
-    res.status(200).json({ ok: true });
+    res.status(200).json({ ok: true, submissionId: hasDb ? submissionId : undefined });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Upload failed';
     const lower = message.toLowerCase();

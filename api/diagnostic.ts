@@ -15,5 +15,6 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
     ok: true,
     time: new Date().toISOString(),
     blobReadWriteToken: process.env.BLOB_READ_WRITE_TOKEN ? 'configured' : 'missing',
+    databaseUrl: process.env.DATABASE_URL?.trim() ? 'configured' : 'missing',
   });
 }

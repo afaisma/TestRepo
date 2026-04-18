@@ -132,7 +132,7 @@ function defaultLocalDatetime(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-type Route = 'capture' | 'view' | 'admin';
+type Route = 'capture' | 'view' | 'admin' | 'browse';
 
 type PhotoMeta = {
   date_time: string;
@@ -148,6 +148,7 @@ function currentRoute(): Route {
   const seg = (h || 'capture').toLowerCase();
   if (seg === 'view') return 'view';
   if (seg === 'admin') return 'admin';
+  if (seg === 'browse') return 'browse';
   return 'capture';
 }
 
@@ -168,7 +169,7 @@ function renderCapture(root: HTMLDivElement) {
   root.innerHTML = `
     <header>
       <h1>Capture</h1>
-      <nav><a href="#/view">View last</a> · <a href="#/admin">Locations</a></nav>
+      <nav><a href="#/view">View last</a> · <a href="#/browse">Browse</a> · <a href="#/admin">Locations</a></nav>
     </header>
     <div class="preview-wrap" id="previewBox">
       <span class="preview-placeholder" id="placeholder">Camera preview</span>
@@ -416,6 +417,14 @@ function renderCapture(root: HTMLDivElement) {
       body.append('date_time', metaDateTime.value);
       body.append('location', metaLocation.value);
       body.append('notes', metaNotes.value.trim());
+      body.append(
+        'client_info',
+        JSON.stringify({
+          userAgent: navigator.userAgent,
+          language: navigator.language,
+          platform: navigator.platform,
+        }),
+      );
       const res = await fetch('/api/upload', {
         method: 'POST',
         body,
@@ -455,7 +464,7 @@ function renderView(root: HTMLDivElement) {
   root.innerHTML = `
     <header>
       <h1>Last upload</h1>
-      <nav><a href="#/capture">Capture</a> · <a href="#/admin">Locations</a></nav>
+      <nav><a href="#/capture">Capture</a> · <a href="#/browse">Browse</a> · <a href="#/admin">Locations</a></nav>
     </header>
     <div class="view-frame" id="frame">
       <img id="shot" alt="Last uploaded image" style="display:none" />
@@ -518,11 +527,141 @@ function renderView(root: HTMLDivElement) {
     });
 }
 
+type SubmissionItem = {
+  id: string;
+  capturedAt: string;
+  createdAt: string;
+  location: string;
+  notes: string;
+  imageUrl: string;
+};
+
+function renderBrowse(root: HTMLDivElement) {
+  root.innerHTML = `
+    <header>
+      <h1>Browse</h1>
+      <nav><a href="#/capture">Capture</a> · <a href="#/view">View last</a> · <a href="#/admin">Locations</a></nav>
+    </header>
+    <p class="browse-hint">Provide a <strong>location</strong> and/or a calendar day in <strong>UTC</strong> (same rules as <code>GET /api/submissions</code>).</p>
+    <div class="browse-filters">
+      <label>
+        Location (optional if day is set)
+        <select id="browseLocation" disabled>
+          <option value="">Loading…</option>
+        </select>
+      </label>
+      <label>
+        Day (UTC, optional)
+        <input type="date" id="browseDate" />
+      </label>
+      <button type="button" class="btn-primary" id="browseLoad">List submissions</button>
+    </div>
+    <p class="status" id="browseStatus" aria-live="polite"></p>
+    <div class="submission-grid" id="browseGrid"></div>
+  `;
+
+  const locSel = root.querySelector<HTMLSelectElement>('#browseLocation')!;
+  const dateInp = root.querySelector<HTMLInputElement>('#browseDate')!;
+  const loadBtn = root.querySelector<HTMLButtonElement>('#browseLoad')!;
+  const statusEl = root.querySelector<HTMLParagraphElement>('#browseStatus')!;
+  const grid = root.querySelector<HTMLDivElement>('#browseGrid')!;
+
+  const setStatus = (text: string, kind: '' | 'error' | 'ok' | 'info' = '') => {
+    statusEl.textContent = text;
+    statusEl.className = `status${kind ? ` ${kind}` : ''}`;
+  };
+
+  fetch('/api/locations')
+    .then(async (r) => {
+      if (!r.ok) throw new Error('Could not load locations');
+      const data = (await r.json()) as { locations?: unknown };
+      const locs = Array.isArray(data.locations)
+        ? data.locations.filter((x): x is string => typeof x === 'string')
+        : [];
+      locSel.disabled = false;
+      locSel.innerHTML =
+        '<option value="">Any location</option>' +
+        locs.map((loc) => {
+          const label = escapeHtml(loc);
+          const val = escapeHtmlAttr(loc);
+          return `<option value="${val}">${label}</option>`;
+        }).join('');
+    })
+    .catch((e) => {
+      locSel.disabled = false;
+      locSel.innerHTML = '<option value="">(failed to load locations)</option>';
+      setStatus(e instanceof Error ? e.message : 'Could not load locations', 'error');
+    });
+
+  const load = async () => {
+    const location = locSel.value.trim();
+    const day = dateInp.value.trim();
+    if (!location && !day) {
+      setStatus('Choose a location and/or a UTC day.', 'error');
+      return;
+    }
+    const params = new URLSearchParams({ limit: '50' });
+    if (location) params.set('location', location);
+    if (day) params.set('date', day);
+    loadBtn.disabled = true;
+    setStatus('Loading…', 'info');
+    grid.innerHTML = '';
+    try {
+      const res = await fetch(`/api/submissions?${params}`);
+      const raw = await res.text();
+      let payload: { error?: string; submissions?: SubmissionItem[] };
+      try {
+        payload = JSON.parse(raw) as { error?: string; submissions?: SubmissionItem[] };
+      } catch {
+        throw new Error(raw.slice(0, 200));
+      }
+      if (!res.ok) {
+        throw new Error(payload.error || `HTTP ${res.status}`);
+      }
+      const items = payload.submissions ?? [];
+      if (items.length === 0) {
+        setStatus('No submissions match.', 'ok');
+        return;
+      }
+      setStatus(`${items.length} submission(s).`, 'ok');
+      const bust = Date.now();
+      grid.innerHTML = items
+        .map((s) => {
+          const when = new Date(s.capturedAt);
+          const dateStr = Number.isNaN(when.getTime())
+            ? s.capturedAt
+            : when.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+          const notes =
+            s.notes && s.notes.trim()
+              ? `<p class="submission-notes">${escapeHtml(s.notes.trim())}</p>`
+              : '';
+          const imgHref = `${s.imageUrl}${s.imageUrl.includes('?') ? '&' : '?'}_=${bust}`;
+          return `
+            <article class="submission-card">
+              <a href="${escapeHtmlAttr(imgHref)}" target="_blank" rel="noopener noreferrer">
+                <img src="${escapeHtmlAttr(imgHref)}" alt="" loading="lazy" width="400" height="300" />
+              </a>
+              <p class="submission-meta"><strong>${escapeHtml(dateStr)}</strong> · ${escapeHtml(s.location)}</p>
+              ${notes}
+            </article>
+          `;
+        })
+        .join('');
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Request failed', 'error');
+    } finally {
+      loadBtn.disabled = false;
+    }
+  };
+
+  loadBtn.addEventListener('click', () => void load());
+}
+
 function renderAdmin(root: HTMLDivElement) {
   root.innerHTML = `
     <header>
       <h1>Locations</h1>
-      <nav><a href="#/capture">Capture</a> · <a href="#/view">View last</a></nav>
+      <nav><a href="#/capture">Capture</a> · <a href="#/view">View last</a> · <a href="#/browse">Browse</a></nav>
     </header>
     <p class="admin-note">POC: saving is not authenticated — anyone who can open this URL can change the list.</p>
     <div id="locList" class="loc-list"></div>
@@ -636,6 +775,8 @@ function render() {
   const root = app;
   if (route === 'view') {
     renderView(root);
+  } else if (route === 'browse') {
+    renderBrowse(root);
   } else if (route === 'admin') {
     renderAdmin(root);
   } else {
